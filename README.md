@@ -19,7 +19,7 @@ wget "https://seafile.tinnguyen-lab.com/f/9aa42f40d78247bc95db/?dl=1" -O DSCC_Ma
 wget "https://seafile.tinnguyen-lab.com/f/2ad884778b00467ea690/?dl=1" -O DSCC_Relevant.zip
 
 # Download data for comparison methods
-wget -O Others_Main.zip
+wget "https://seafile.tinnguyen-lab.com/f/7c943f8328b3452db479/?dl=1" -O Others_Main.zip
 wget "https://seafile.tinnguyen-lab.com/f/5f1d638d32a641d08e56/?dl=1" -O Others_Relevant.zip
 
 # unzip the downloaded files
