@@ -4,8 +4,9 @@ This repo contains the source code and scripts for reproducing the results repor
 Please follow the below instructions:
 
 1. Requirements
-# You need an environment with both R and python installed.
-# Also, each of the provided scripts might require packages being installed before you can run them.
+
+You need an environment with both R and python installed.
+Also, each of the provided scripts might require packages being installed before you can run them.
    
 2. Setup
 ```bash
