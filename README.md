@@ -14,6 +14,11 @@ Also, each of the provided scripts might require some packages being installed b
 git clone https://github.com/tinnlab/DSCC.git
 cd DSCC
 
+# create result folders
+mkdir Subtyping_Results
+mkdir SubSurvClin
+mkdir SP_Results
+
 # create a data folder
 mkdir Data
 cd /Data
