@@ -19,6 +19,7 @@ if (!file.exists(resPath)) {
 }
 
 for (dataset in datasets) {
+# mclapply(datasets, mc.cores=length(datasets), function(dataset){
   (function() {
     message("Subtyping on: ", dataset)
     rds <- readRDS(file.path(processedDataPath, paste0(dataset, ".rds")))
@@ -121,4 +122,6 @@ for (dataset in datasets) {
     }
   })()
   gc()
+# })
 }
+
