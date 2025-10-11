@@ -13,11 +13,11 @@ To run DSCC you need an R-installed environment with the following packages. **N
 |---------|---------|
 | r-base | 4.3.2 |
 | tidyverse | 2.0.0 |
-| survival | 3.5-7 |
+| survival | 3.5.7 |
 | matrixStats | 1.1.0 |
 | SNFtool | 2.3.1 |
 | igraph | 2.0.2 |
-| cluster | 2.1.4 |
+| cluster | 2.1.8 |
 | RhpcBLASctl | latest |
 
 ### Additional Requirements (Comparison methods)
