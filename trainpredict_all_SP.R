@@ -11,7 +11,7 @@ library(rsample)
 library(blockForest)
 
 datPath <- "./SubSurvClin"
-methods <- c("nosubtype", "DSCC", "CC", "CIMLR", "SNF", "LRACluster", "ANF", "IntNMF")
+methods <- c("Baseline", "DSCC", "CC", "CIMLR", "SNF", "LRACluster", "IntNMF", "ANF", "NEMO", "MOVICS", "MRGCN", "hMKL", "MDICC", "DLSF", "DSIR")
 savePath <- "./SP_Results"
 
 allFiles <- list.files(file.path(datPath, methods[1]))
