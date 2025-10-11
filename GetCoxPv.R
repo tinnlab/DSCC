@@ -14,8 +14,7 @@ datasets <- gsub("DSCC-", "", datasets)
 datasets <- strsplit(datasets, ".rds")
 datasets <- lapply(datasets, function(elm) { elm[1] }) %>% unlist()
 
-methods <- c("DSCC", "CC", "CIMLR", "SNF", "LRACluster", "IntNMF", "ANF")
-# methods <- c("DSCC")
+methods <- c("CC", "CIMLR", "SNF", "LRACluster", "IntNMF", "ANF", "NEMO", "MOVICS", "MRGCN", "hMKL", "MDICC", "DLSF", "DSIR")
 
 allRes_methods <- lapply(methods, function(method) {
 
