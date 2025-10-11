@@ -114,6 +114,9 @@ Rscript Run_Other.R --no-save
 # Cox p-values and numbers of clusters
 Rscript GetCoxPv.R --no-save
 
+# Empirical p-values and numbers of clusters
+Rscript GetEmpPv.R --no-save
+
 # C-Indices
 Rscript GetData_SP.R --no-save
 Rscript trainpredict_all_SP.R --no-save
