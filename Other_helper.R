@@ -1,4 +1,6 @@
-# Wrapper to run each method
+### you need to copy the path to python environment for several methods; search for "path-to-python-env"
+
+options(mc.cores = 1)
 RhpcBLASctl::blas_set_num_threads(1)
 RhpcBLASctl::omp_set_num_threads(1)
 
@@ -6,6 +8,7 @@ Sys.setenv(OMP_NUM_THREADS = 1, OPENBLAS_NUM_THREADS = 1, MKL_NUM_THREADS = 1, V
 
 # Wrapper to run each method
 suppressMessages({ suppressWarnings({
+  library(MOVICS)
   library(ANF)
   library(PMA)
   library(IntNMF)
@@ -17,21 +20,29 @@ suppressMessages({ suppressWarnings({
   library(ConsensusClusterPlus)
   library(CIMLR)
   library(SNFtool)
+  library(NEMO)
   library(NNLM)
-  library(igraph)
-  library(mogsa)
   library(polycor)
   library(psych)
   library(FactoMineR)
-  library(AnnotationDbi)
-  library(org.Hs.eg.db)
   library(pbmcapply)
   library(LRAcluster)
   library(cluster)
   library(survminer)
-
+  library(dplyr)
+  library(reticulate)
+  library(callr)
+  library(SIMLR)
+  library(parallel)
+  library(Matrix)
+  library(MASS)
+  library(quadprog)
+  library(Rtsne)
 }) })
 
+Sys.setenv(CUDA_VISIBLE_DEVICES = sample(0:5, 1))
+source("./R/hMKL/load_hMKL.R")
+source("./R/MDICC/Functions.R")
 LRAClus_prob <- readRDS("./Data/Others_Relevant/LRAClus_meth.rds")
 
 standardNormalization <- function(x) {
@@ -43,16 +54,16 @@ standardNormalization <- function(x) {
   return(xNorm)
 }
 
-listNorm <- function(dataList){
-  newdataList <- lapply(names(dataList), function(dataType){
+listNorm <- function(dataList) {
+  newdataList <- lapply(names(dataList), function(dataType) {
     data <- dataList[[dataType]]
-    if(!dataType %in% c("meth450", "clinicalMCA")){
-        if(min(data) >= 0){
-          data <- standardNormalization(data)
-        }
+    if (!dataType %in% c("meth450", "clinicalMCA")) {
+      if (min(data) >= 0) {
+        data <- standardNormalization(data)
+      }
     }
     return(as.matrix(data))
-  }) %>% `names<-` (names(dataList))
+  }) %>% `names<-`(names(dataList))
   return(newdataList)
 }
 
@@ -132,15 +143,17 @@ runCC <- function(dataList) {
 }
 
 #### SNF ####
-runSNF <- function(dataList) {
+runSNF <- function(dataList, norm = T) {
   ## First, set all the parameters:
   K = 10; ##number of neighbors, usually (10~30)
   alpha = 0.5; ##hyperparameter, usually (0.3~0.8)
   NIT = 20; ###Number of Iterations, usually (10~20)
 
   # Normalization
-  dataList <- listNorm(dataList)
-  PS <- lapply(dataList, function(dat) dist2(as.matrix(dat), as.matrix(dat)))
+  if (norm) {
+    dataList <- listNorm(dataList)
+  }
+  PS <- lapply(dataList, function(dat) SNFtool::dist2(as.matrix(dat), as.matrix(dat)))
 
   # Add code to handle the problem of low number of samples
   minSamp <- min(lapply(dataList, nrow) %>% do.call(what = c))
@@ -190,11 +203,15 @@ runCIMLR <- function(dataList) {
 }
 
 ### LRACluster ###
-runLRACluster <- function(dataList) {
-  if ("meth450" %in% names(dataList)) {
-    tmp <- dataList$meth450
-    dataList$meth450 <- tmp[, colnames(tmp) %in% LRAClus_prob]
-    rm(tmp)
+runLRACluster <- function(dataList, procmeth = T) {
+  if (procmeth) {
+    if ("meth450" %in% names(dataList)) {
+      tmp <- dataList$meth450
+      if(length(grep("cg", colnames(tmp))) > 0){
+        dataList$meth450 <- tmp[, colnames(tmp) %in% LRAClus_prob]
+      }
+      rm(tmp)
+    }
   }
 
   dataList <- lapply(dataList, t)
@@ -241,7 +258,7 @@ runIntNMF <- function(dataList) {
   })
   # making negative to positive
   dataList <- lapply(dataList, function(dat) {
-    if (min(dat) < 0){
+    if (min(dat) < 0) {
       dat <- (dat - min(dat)) # make it non negative
     }
     dat[, colSds(dat) > 0 & colSums(dat) > 0] + .Machine$double.eps
@@ -267,7 +284,7 @@ runANF <- function(dataList) {
 
   # Normalization
   dataList <- listNorm(dataList)
-  PS <- lapply(dataList, function(dat) dist2(as.matrix(dat), as.matrix(dat)))
+  PS <- lapply(dataList, function(dat) SNFtool::dist2(as.matrix(dat), as.matrix(dat)))
   WList <- lapply(PS, function(ps) ANF::affinity_matrix(ps, K))
   set.seed(1234)
   W <- ANF::ANF(WList, K = K)
@@ -278,3 +295,682 @@ runANF <- function(dataList) {
   cluster
 
 }
+
+### NEMO ###
+runNEMO <- function(dataList) {
+
+  nemo.affinity.graph <- function(raw.data, k = NA) {
+    if (is.na(k)) {
+      k = as.numeric(lapply(1:length(raw.data), function(i) round(ncol(raw.data[[i]]) / NUM.NEIGHBORS.RATIO)))
+    } else if (length(k) == 1) {
+      k = rep(k, length(raw.data))
+    }
+
+    sim.data = lapply(1:length(raw.data), function(i) { affinityMatrix(SNFtool::dist2(as.matrix(t(raw.data[[i]])),
+                                                                             as.matrix(t(raw.data[[i]]))), k[i], 0.5) })
+    affinity.per.omic = lapply(1:length(raw.data), function(i) {
+      sim.datum = sim.data[[i]]
+      non.sym.knn = apply(sim.datum, 1, function(sim.row) {
+        returned.row = sim.row
+        threshold = sort(sim.row, decreasing = T)[k[i]]
+        returned.row[sim.row < threshold] = 0
+        row.sum = sum(returned.row)
+        returned.row[sim.row >= threshold] = returned.row[sim.row >= threshold] / row.sum
+        return(returned.row)
+      })
+      sym.knn = non.sym.knn + t(non.sym.knn)
+      return(sym.knn)
+    })
+    patient.names = Reduce(union, lapply(raw.data, colnames))
+    num.patients = length(patient.names)
+    returned.affinity.matrix = matrix(0, ncol = num.patients, nrow = num.patients)
+    rownames(returned.affinity.matrix) = patient.names
+    colnames(returned.affinity.matrix) = patient.names
+
+    shared.omic.count = matrix(0, ncol = num.patients, nrow = num.patients)
+    rownames(shared.omic.count) = patient.names
+    colnames(shared.omic.count) = patient.names
+
+    for (j in 1:length(raw.data)) {
+      curr.omic.patients = colnames(raw.data[[j]])
+      returned.affinity.matrix[curr.omic.patients, curr.omic.patients] = returned.affinity.matrix[curr.omic.patients, curr.omic.patients] + affinity.per.omic[[j]][curr.omic.patients, curr.omic.patients]
+      shared.omic.count[curr.omic.patients, curr.omic.patients] = shared.omic.count[curr.omic.patients, curr.omic.patients] + 1
+    }
+
+    final.ret = returned.affinity.matrix / shared.omic.count
+    lower.tri.ret = final.ret[lower.tri(final.ret)]
+    final.ret[shared.omic.count == 0] = mean(lower.tri.ret[!is.na(lower.tri.ret)])
+
+    return(final.ret)
+  }
+
+  dataList <- listNorm(dataList)
+  dataList <- lapply(dataList, function(data) {
+    t(data)
+  })
+  graph <- nemo.affinity.graph(dataList)
+  num.clusters <- nemo.num.clusters(graph, 2:10)
+  clustering <- spectralClustering(graph, num.clusters)
+  names(clustering) <- colnames(graph)
+  clustering
+}
+
+### run moCluster ###
+runmoCluster <- function(dataList) {
+  dataList <- lapply(dataList, t)
+  set.seed(1234)
+  moa <- mbpca(dataList, ncomp = 10, method = "globalScore")
+  B = 100
+  while (B > 0) {
+    set.seed(1234)
+    r <- try({ bootMbpca(moa, plot = F, B = B, mc.cores = 4) })
+    B <- B - 10
+    if (!is(r, "try-error")) {
+      break()
+    }
+  }
+
+  if (is(r, "try-error")) {
+    stop("Error when running bootMbpca")
+  }
+  # r <- bootMbpca(moa, plot = F)
+  ncomp = which(colMeans(r) > moa@eig)[1] - 1
+  if (ncomp < 2) {
+    ncomp <- 2
+  }
+
+  set.seed(1234)
+  moas <- mbpca(dataList, ncomp = ncomp, method = "globalScore")
+  scrs <- moaScore(moas)
+
+  set.seed(1234)
+  gap <- moGap(moas, K.max = 10, cluster = "hcl", plot = F)
+
+  g <- gap$Tab[, 3]
+  gse <- c(gap$Tab[, 3] - gap$Tab[, 4], 0)[-1]
+
+  candidateK <- which(g > gse)
+  k = candidateK[which(candidateK > 1)][1]
+
+  set.seed(1234)
+  hcl <- hclust(dist(scrs))
+  cutree(hcl, k = k)
+}
+
+
+## run MOVICS ###
+runMOVICS <- function(dataList) {
+  dataList <- lapply(dataList, as.matrix)
+  dataList <- lapply(dataList, t)
+
+  getClustNum <- function(data = NULL,
+                          is.binary = rep(FALSE, length(data)),
+                          try.N.clust = 2:8,
+                          center = TRUE,
+                          scale = TRUE) {
+
+    # check data
+    n_dat <- length(data)
+    if (n_dat > 6) {
+      stop('current verision of MOVICS can support up to 6 datasets.')
+    }
+    if (n_dat < 2) {
+      stop('current verision of MOVICS needs at least 2 omics data.')
+    }
+
+    data.backup <- data # save a backup
+
+    #--------------------------------------------#
+    # Cluster Prediction Index (CPI) from IntNMF #
+    # remove features that made of categories not equal to 2 otherwise Error in svd(X) : a dimension is zero
+    if (!all(!is.binary)) {
+      bindex <- which(is.binary == TRUE)
+      for (i in bindex) {
+        a <- which(rowSums(data[[i]]) == 0)
+        b <- which(rowSums(data[[i]]) == ncol(data[[i]]))
+        if (length(a) > 0) {
+          data[[i]] <- data[[i]][which(rowSums(data[[i]]) != 0),] # remove all zero
+        }
+
+        if (length(b) > 0) {
+          data[[i]] <- data[[i]][which(rowSums(data[[i]]) != ncol(data[[i]])),] # remove all one
+        }
+
+        if (length(a) + length(b) > 0) {
+          message(paste0("--", names(data)[i], ": a total of ", length(a) + length(b), " features were removed due to the categories were not equal to 2!"))
+        }
+      }
+    }
+
+    # In order to make the input data fit non-negativity constraint of intNMF,
+    # the values of the data were shifted to positive direction by adding absolute value of the smallest negative number.
+    # Further, each data was rescaled by dividing by maximum value of the data to make the magnitudes comparable (between 0 and 1) across the several datasets.
+    dat <- lapply(data, function(dd) {
+      if (!all(dd >= 0)) dd <- pmax(dd + abs(min(dd)), 0) + .Machine$double.eps # .Machine$double.eps as The smallest positive floating-point number x
+      dd <- dd / max(dd)
+      return(dd %>% as.matrix)
+    })
+
+    #dat <- lapply(dat, t)
+    dat <- lapply(dat, function(x) t(x) + .Machine$double.eps)
+
+    message("calculating Cluster Prediction Index...")
+    optk1 <- IntNMF::nmf.opt.k(dat = dat,
+                               n.runs = 5,
+                               n.fold = 5,
+                               k.range = try.N.clust,
+                               st.count = 10,
+                               maxiter = 100,
+                               make.plot = FALSE)
+    optk1 <- as.data.frame(optk1)
+
+    #-------------------------------#
+    # Gap-statistics from MoCluster #
+    message("calculating Gap-statistics...")
+    moas <- data.backup %>% mogsa::mbpca(ncomp = 2,
+                                         k = "all",
+                                         method = "globalScore",
+                                         center = center,
+                                         scale = scale,
+                                         moa = TRUE,
+                                         svd.solver = "fast",
+                                         maxiter = 100,
+                                         verbose = FALSE)
+    gap <- mogsa::moGap(moas, K.max = max(try.N.clust), cluster = "hclust", plot = FALSE)
+    optk2 <- as.data.frame(gap$Tab)[-1,] # remove k=1
+
+    N.clust <- as.numeric(which.max(apply(optk1, 1, mean) + optk2$gap)) + 1
+    if (length(N.clust) == 0) {
+      message("--fail to define the optimal cluster number!")
+      N.clust <- "null"
+    }
+    return(N.clust)
+  }
+
+  N.clust <- getClustNum(data = dataList,
+                         try.N.clust = 2:10)
+
+  ### try running 10 algorithm separately
+  iCBRes <- try({ MOVICS::getMOIC(data = dataList,
+                                  methodslist = "iClusterBayes",
+                                  N.clust = N.clust,
+                                  type = rep("gaussian", length(dataList))) })
+
+  SNFRes <- try({ MOVICS::getMOIC(data = dataList,
+                                  methodslist = "SNF",
+                                  N.clust = N.clust,
+                                  type = rep("gaussian", length(dataList))) })
+
+  PINSRes <- try({ MOVICS::getMOIC(data = dataList,
+                                   methodslist = "PINSPlus",
+                                   N.clust = N.clust,
+                                   type = rep("gaussian", length(dataList))) })
+
+  NEMORes <- try({ MOVICS::getMOIC(data = dataList,
+                                   methodslist = "NEMO",
+                                   N.clust = N.clust,
+                                   type = rep("gaussian", length(dataList))) })
+
+  COCARes <- try({ MOVICS::getMOIC(data = dataList,
+                                   methodslist = "COCA",
+                                   N.clust = N.clust,
+                                   type = rep("gaussian", length(dataList))) })
+
+  LRARes <- try({ MOVICS::getMOIC(data = dataList,
+                                  methodslist = "LRAcluster",
+                                  N.clust = N.clust,
+                                  type = rep("gaussian", length(dataList))) })
+
+  CCRes <- try({ MOVICS::getMOIC(data = dataList,
+                                 methodslist = "ConsensusClustering",
+                                 N.clust = N.clust,
+                                 type = rep("gaussian", length(dataList))) })
+
+  IntRes <- try({ MOVICS::getMOIC(data = dataList,
+                                  methodslist = "IntNMF",
+                                  N.clust = N.clust,
+                                  type = rep("gaussian", length(dataList))) })
+
+  CIMLRRes <- try({ MOVICS::getMOIC(data = dataList,
+                                    methodslist = "CIMLR",
+                                    N.clust = N.clust,
+                                    type = rep("gaussian", length(dataList))) })
+
+  MoCRes <- try({ MOVICS::getMOIC(data = dataList,
+                                  methodslist = "MoCluster",
+                                  N.clust = N.clust,
+                                  type = rep("gaussian", length(dataList))) })
+
+  alltmp <- list(iCBRes, SNFRes, PINSRes, NEMORes, COCARes, LRARes, CCRes, IntRes, CIMLRRes, MoCRes)
+
+  alltmp <- lapply(alltmp, function(clusterRes) {
+    if (is(clusterRes, "try-error")) {
+      clusterRes <- NULL
+    }
+    clusterRes
+  })
+
+  methodslist <- c("iClusterBayes", "SNF", "PINSPlus", "NEMO", "COCA", "LRAcluster", "ConsensusClustering", "IntNMF", "CIMLR", "MoCluster")
+  methodslist <- methodslist[!sapply(alltmp, is.null)]
+  alltmp <- alltmp[!sapply(alltmp, is.null)]
+  names(alltmp) <- methodslist
+
+  cmoic <- MOVICS::getConsensusMOIC(moic.res.list = alltmp,
+                                    distance = "euclidean",
+                                    linkage = "average")
+
+  cluster <- cmoic$clust.res$clust
+  names(cluster) <- cmoic$clust.res$samID
+  return(cluster)
+}
+
+
+### run MRGCN ###
+runMRGCN <- function(dataList, conda_env = "path-to-python-env") {
+  result <- r(function(dataList, conda_env) {
+    library(tidyverse)
+    library(reticulate)
+    reticulate::use_condaenv(conda_env)
+    reticulate::source_python("./Python/MRGCN/train.py")
+
+    standardNormalization <- function(x) {
+      x = as.matrix(x)
+      mean = apply(x, 2, mean)
+      sd = apply(x, 2, sd)
+      sd[sd == 0] = 1
+      xNorm = t((t(x) - mean) / sd)
+      return(xNorm)
+    }
+
+    listNorm <- function(dataList) {
+      newdataList <- lapply(names(dataList), function(dataType) {
+        data <- dataList[[dataType]]
+        if (!dataType %in% c("meth450", "clinicalMCA")) {
+          if (min(data) >= 0) {
+            data <- standardNormalization(data)
+          }
+        }
+        return(as.matrix(data))
+      }) %>% `names<-`(names(dataList))
+      return(newdataList)
+    }
+
+    dataList <- listNorm(dataList)
+    patients <- rownames(dataList[[1]])
+    names(dataList) <- NULL
+
+    run_cancer_clustering <- function(dataList, seed = 1234) {
+      # Validate input
+      if (!is.list(dataList) || length(dataList) == 0) {
+        stop("dataList must be a non-empty list of data matrices/arrays")
+      }
+
+      # Data validation and conversion
+      for (i in seq_along(dataList)) {
+        # cat("  Modality", i, ":", paste(dim(dataList[[i]]), collapse=" x "))
+        # cat(", class:", class(dataList[[i]]))
+        # cat(", type:", typeof(dataList[[i]]))
+
+        # Check for any problematic values
+        if (any(is.na(dataList[[i]]))) {
+          cat(", contains NA values")
+          # Replace NA with 0
+          dataList[[i]][is.na(dataList[[i]])] <- 0
+        }
+
+        if (any(is.infinite(dataList[[i]]))) {
+          cat(", contains infinite values")
+          # Replace infinite values with 0
+          dataList[[i]][is.infinite(dataList[[i]])] <- 0
+        }
+
+        # Ensure data is numeric matrix/array
+        if (!is.numeric(dataList[[i]])) {
+          cat(", converting to numeric")
+          dataList[[i]] <- as.numeric(dataList[[i]])
+        }
+
+        # Ensure it's a matrix
+        if (!is.matrix(dataList[[i]])) {
+          cat(", converting to matrix")
+          dataList[[i]] <- as.matrix(dataList[[i]])
+        }
+
+        # Explicitly convert to double (R's default numeric type)
+        storage.mode(dataList[[i]]) <- "double"
+
+        cat("\n")
+      }
+
+      # Validate that all matrices have the same number of rows
+      # n_samples <- nrow(dataList[[1]])
+      # for (i in 2:length(dataList)) {
+      #   if (nrow(dataList[[i]]) != n_samples) {
+      #     stop(paste("All data modalities must have the same number of samples.",
+      #                "Modality 1 has", n_samples, "samples, but modality", i,
+      #                "has", nrow(dataList[[i]]), "samples."))
+      #   }
+      # }
+
+      # cat("Data validation completed. All modalities have", n_samples, "samples.\n")
+
+      # Use do.call to pass variable number of arguments to Python function
+      # The data gets automatically converted from R to Python numpy arrays
+      tryCatch({
+        results <- do.call(run_clustering_with_data, c(dataList, list(seed = seed)))
+
+        # Convert results back to R format
+        r_results <- list(
+          cluster_assignments = as.vector(results$cluster_assignments),
+          soft_assignments = results$soft_assignments,
+          shared_representation = results$shared_representation,
+          cluster_centers = results$cluster_centers,
+          n_clusters = results$n_clusters,
+          n_modalities = results$n_modalities
+        )
+
+        cat("Clustering completed with", r_results$n_clusters, "clusters\n")
+
+        return(r_results$cluster_assignments + 1)
+
+      }, error = function(e) {
+        cat("Error occurred during clustering:\n")
+        cat("Error message:", conditionMessage(e), "\n")
+        cat("Calling py_last_error() for more details:\n")
+        print(reticulate::py_last_error())
+        stop(e)
+      })
+    }
+
+    cluster <- run_cancer_clustering(dataList)
+    names(cluster) <- patients
+    return(cluster)
+  }, args = list(dataList = dataList, conda_env = conda_env))
+  return(result)
+}
+
+
+### run hMKL ###
+runhMKL <- function(dataList) {
+  dataList <- listNorm(dataList)
+  dataList <- lapply(dataList, function(data) {
+    t(data)
+  })
+
+  dataList_noc <- lapply(dataList, function(data) {
+    data_noc <- CIMLR_noc(data, cores.ratio = 0)
+  }) %>% `names<-`(names(dataList))
+
+  Ss_dataList_noc <- lapply(dataList_noc, function(data) {
+    SS_data_noc <- data$S
+  }) %>% `names<-`(names(dataList_noc))
+
+  set_input <- function(kernel_mat) {
+    output <- list(kernel = kernel_mat)
+    class(output) <- "kernel"
+    return(output)
+  }
+
+  input <- lapply(Ss_dataList_noc, function(data) {
+    input_kernel_noc <- set_input(data)
+  }) %>% `names<-`(names(Ss_dataList_noc))
+
+  meta.kernel_sparse_noc <- do.call(combine.kernels2, c(input, list(method = "sparse-UMKL", scale = FALSE)))
+
+  NUMC <- 2:10
+  res <- SIMLR_Estimate_Clusters_W(meta.kernel_sparse_noc$kernel, NUMC = NUMC)
+  full_K <- res$K1
+  opt_k <- NUMC[which.min(full_K)]
+
+  set.seed(1234)
+  group_sparse_kmeans_noc <- kmeans(meta.kernel_sparse_noc$kernel, opt_k, nstart = 30)
+  group_sparse_kmeans <- group_sparse_kmeans_noc$cluster
+  group_sparse_kmeans
+  names(group_sparse_kmeans) <- colnames(dataList[[1]])
+  group_sparse_kmeans
+}
+
+
+### run MDICC ###
+runMDICC <- function(dataList) {
+  # dataList <- listNorm(dataList)
+  dataList <- lapply(dataList, function(data) {
+    t(data)
+  })
+  X <- lapply(dataList, function(data) {
+    data <- as.matrix(data)
+    data <- scale(data, center = TRUE, scale = TRUE)
+    data <- t(data)
+    dist <- as.matrix(dist(data))
+  })
+
+  aff <- list()
+  for (i in 1:length(X)) {
+    a <- as.matrix(X[[i]])
+    xxx <- testaff(matrix = a)
+    aff[[i]] <- xxx
+  }
+
+  test <- MDICC(X = aff)
+  test_S <- as.matrix(test)
+
+  cluster <- kmean_opt(test_S)
+  names(cluster) <- colnames(dataList[[1]])
+  return(cluster)
+}
+
+
+### run DLSF ###
+runDLSF <- function(dataList, conda_env = "path-to-python-env") {
+  result <- callr::r(function(dataList, conda_env) {
+    library(tidyverse)
+    library(reticulate)
+    reticulate::use_condaenv(conda_env)
+    reticulate::source_python("./Python/DLSF/run.py")
+
+    # Debug: Check if function is loaded
+    cat("Python function available:", exists("deep_multiomics_clustering"), "\n")
+
+    patients <- rownames(dataList[[1]])
+    names(dataList) <- NULL
+
+    run_cancer_clustering <- function(dataList) {
+      # Data validation and conversion
+
+      if (!is.list(dataList) || length(dataList) == 0) {
+        stop("dataList must be a non-empty list of data matrices/arrays")
+      }
+
+      # Data validation and conversion
+      for (i in seq_along(dataList)) {
+        # cat("  Modality", i, ":", paste(dim(dataList[[i]]), collapse=" x "))
+        # cat(", class:", class(dataList[[i]]))
+        # cat(", type:", typeof(dataList[[i]]))
+
+        # Check for any problematic values
+        if (any(is.na(dataList[[i]]))) {
+          cat(", contains NA values")
+          # Replace NA with 0
+          dataList[[i]][is.na(dataList[[i]])] <- 0
+        }
+
+        if (any(is.infinite(dataList[[i]]))) {
+          cat(", contains infinite values")
+          # Replace infinite values with 0
+          dataList[[i]][is.infinite(dataList[[i]])] <- 0
+        }
+
+        # Ensure data is numeric matrix/array
+        if (!is.numeric(dataList[[i]])) {
+          cat(", converting to numeric")
+          dataList[[i]] <- as.numeric(dataList[[i]])
+        }
+
+        # Ensure it's a matrix
+        if (!is.matrix(dataList[[i]])) {
+          cat(", converting to matrix")
+          dataList[[i]] <- as.matrix(dataList[[i]])
+        }
+
+        # Explicitly convert to double (R's default numeric type)
+        storage.mode(dataList[[i]]) <- "double"
+
+        cat("\n")
+      }
+
+      # dataList <- lapply(dataList, function(data){
+      #   as.data.frame(data)
+      # })
+
+      tryCatch({
+        cat("Calling Python function...\n")
+        # Fixed function call - use positional argument
+        r_results <- deep_multiomics_clustering(dataList)
+        # r_results <- r_results + 1
+        return(r_results)
+      }, error = function(e) {
+        cat("Error occurred during clustering:\n")
+        cat("Error message:", conditionMessage(e), "\n")
+        cat("Calling py_last_error() for more details:\n")
+        print(reticulate::py_last_error())
+        stop(e)
+      })
+    }
+
+    cluster <- run_cancer_clustering(dataList)
+    cluster <- cluster + 1
+    names(cluster) <- patients
+    return(cluster)
+  }, args = list(dataList = dataList, conda_env = conda_env))
+
+  # Debug: Check final result
+  return(result)
+}
+
+
+### run DSIR ###
+runDSIR <- function(dataList, conda_env = "path-to-python-env") {
+  coeffMat <- r(function(dataList, conda_env) {
+    library(tidyverse)
+    library(reticulate)
+    reticulate::use_condaenv(conda_env)
+    reticulate::source_python("./Python/DSIR/train.py")
+
+    standardNormalization <- function(x) {
+      x = as.matrix(x)
+      mean = apply(x, 2, mean)
+      sd = apply(x, 2, sd)
+      sd[sd == 0] = 1
+      xNorm = t((t(x) - mean) / sd)
+      return(xNorm)
+    }
+
+    listNorm <- function(dataList) {
+      newdataList <- lapply(names(dataList), function(dataType) {
+        data <- dataList[[dataType]]
+        if (!dataType %in% c("meth450", "clinicalMCA")) {
+          if (min(data) >= 0) {
+            data <- standardNormalization(data)
+          }
+        }
+        return(as.matrix(data))
+      }) %>% `names<-`(names(dataList))
+      return(newdataList)
+    }
+
+    dataList <- listNorm(dataList)
+    names(dataList) <- NULL
+
+    calcoeff <- function(dataList) {
+      # Validate input
+      if (!is.list(dataList) || length(dataList) == 0) {
+        stop("dataList must be a non-empty list of data matrices/arrays")
+      }
+
+      # Data validation and conversion
+      for (i in seq_along(dataList)) {
+        # Check for any problematic values
+        if (any(is.na(dataList[[i]]))) {
+          cat(", contains NA values")
+          # Replace NA with 0
+          dataList[[i]][is.na(dataList[[i]])] <- 0
+        }
+
+        if (any(is.infinite(dataList[[i]]))) {
+          cat(", contains infinite values")
+          # Replace infinite values with 0
+          dataList[[i]][is.infinite(dataList[[i]])] <- 0
+        }
+
+        # Ensure data is numeric matrix/array
+        if (!is.numeric(dataList[[i]])) {
+          cat(", converting to numeric")
+          dataList[[i]] <- as.numeric(dataList[[i]])
+        }
+
+        # Ensure it's a matrix
+        if (!is.matrix(dataList[[i]])) {
+          cat(", converting to matrix")
+          dataList[[i]] <- as.matrix(dataList[[i]])
+        }
+
+        # Explicitly convert to double (R's default numeric type)
+        storage.mode(dataList[[i]]) <- "double"
+
+        cat("\n")
+      }
+
+      tryCatch({
+        coefmat <- compute_coef_matrix(dataList)
+        return(coefmat)
+
+      }, error = function(e) {
+        cat("Error occurred during clustering:\n")
+        cat("Error message:", conditionMessage(e), "\n")
+        cat("Calling py_last_error() for more details:\n")
+        print(reticulate::py_last_error())
+        stop(e)
+      })
+    }
+
+    outmat <- calcoeff(dataList)
+    return(outmat)
+  }, args = list(dataList = dataList, conda_env = conda_env))
+
+  coeffMat <- as.matrix(coeffMat)
+
+  DSIR.num.clusters <- function(W, NUMC=2:10) {
+    if (min(NUMC) == 1) {
+      warning("Note that we always assume there are more than one cluster.")
+      NUMC = NUMC[NUMC > 1]
+    }
+    W = (W + t(W))/2
+    diag(W) = 0
+    if (length(NUMC) > 0) {
+      degs = rowSums(W)
+      degs[degs == 0] = .Machine$double.eps
+      D = diag(degs)
+      L = D - W
+      Di = diag(1/sqrt(degs))
+      L = Di %*% L %*% Di
+      print(dim(L))
+      eigs = eigen(L)
+      eigs_order = sort(eigs$values, index.return = T)$ix
+      eigs$values = eigs$values[eigs_order]
+      eigs$vectors = eigs$vectors[, eigs_order]
+      eigengap = abs(diff(eigs$values))
+      eigengap = (1:length(eigengap)) * eigengap
+      
+      t1 <- sort(eigengap[NUMC], decreasing = TRUE, index.return = T)$ix
+      return(NUMC[t1[1]])
+    }
+  }
+
+  optk <- DSIR.num.clusters(coeffMat)
+  S <- 0.5*(coeffMat + t(coeffMat))
+
+  cluster <- spectralClustering(S, optk)
+  names(cluster) <- rownames(dataList[[1]])
+  return(cluster)
+}
+
