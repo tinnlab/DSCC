@@ -22,10 +22,13 @@ if (!file.exists(resPath)) {
   dir.create(resPath)
 }
 
-methods <- c("CC", "CIMLR", "SNF", "LRACluster", "IntNMF", "ANF")
+methods <- c("CC", "CIMLR", "SNF", "LRACluster", "IntNMF", "ANF", "NEMO", "MOVICS", "MRGCN", "hMKL", "MDICC", "DLSF", "DSIR")
+
 intersect_methods <- c("CC", "CIMLR", "SNF", "LRACluster", "IntNMF", "ANF")
+union_methods <- c("NEMO", "MRGCN")
 
 for (dataset in datasets) {
+# mclapply(datasets, mc.cores=length(datasets), function(dataset){
   (function() {
     message("Subtyping on: ", dataset)
     rds <- readRDS(file.path(dataPath, paste0(dataset, ".rds")))
@@ -46,29 +49,70 @@ for (dataset in datasets) {
     }
 
     rm(rds)
-    gc()
-
+    # gc()
+    # mclapply(methods, mc.cores=5, function(method){
     for (method in methods) {
+      message(method, "\t", dataset)
+      # if (file.exists(file.path(resPath, paste0(method, "-", dataset, ".rds")))) {
+      #   next
+      # }
       (function() {
-        message(method, "\t", dataset)
 
-        intersectSamples <- Reduce(intersect, lapply(toUseDataList, rownames)) %>% unique()
-        toUseSamples <- intersect(intersectSamples, rownames(survival))
+        if (method %in% union_methods) {
+          unionSamples <- Reduce(c, lapply(toUseDataList, rownames)) %>% unique()
+          toUseSamples <- intersect(unionSamples, rownames(survival))
 
-        toUseDataList <- lapply(toUseDataList, function(data) {
-          sampkeep <- rownames(data)[rownames(data) %in% toUseSamples]
-          sampkeep <- sort(sampkeep, decreasing = T)
-          if (length(sampkeep) < 2) {
-            data <- NULL
-          }else {
-            data <- data[sampkeep,]
+          toUseDataList <- lapply(toUseDataList, function(data) {
+            sampkeep <- rownames(data)[rownames(data) %in% toUseSamples]
+            if (length(sampkeep) < 2) {
+              data <- NULL
+            }else {
+              data <- data[sampkeep,]
+            }
+            data
+          }) %>% `names<-`(names(toUseDataList))
+
+          toUseDataList <- toUseDataList[!sapply(toUseDataList, is.null)]
+          unionSamples <- Reduce(c, lapply(toUseDataList, rownames)) %>% unique()
+          toUseSamples <- intersect(unionSamples, rownames(survival))
+
+          if (method == "MRGCN") {
+            toUseDataList <- lapply(toUseDataList, function(data) {
+              missingSamples <- setdiff(toUseSamples, rownames(data))
+              if (length(missingSamples) > 0) {
+                missingData <- matrix(0,
+                                      nrow = length(missingSamples),
+                                      ncol = ncol(data),
+                                      dimnames = list(missingSamples, colnames(data)))
+                if (is.data.frame(data)) {
+                  missingData <- as.data.frame(missingData)
+                }
+                data <- rbind(data, missingData)
+              }
+              data <- data[toUseSamples, , drop = FALSE]
+              return(data)
+            }) %>% `names<-`(names(toUseDataList))
           }
-          data
-        }) %>% `names<-`(names(toUseDataList))
+        }else {
+          intersectSamples <- Reduce(intersect, lapply(toUseDataList, rownames)) %>% unique()
+          toUseSamples <- intersect(intersectSamples, rownames(survival))
 
-        toUseDataList <- toUseDataList[!sapply(toUseDataList, is.null)]
-        intersectSamples <- Reduce(intersect, lapply(toUseDataList, rownames)) %>% unique()
-        toUseSamples <- intersect(intersectSamples, rownames(survival))
+          toUseDataList <- lapply(toUseDataList, function(data) {
+            sampkeep <- rownames(data)[rownames(data) %in% toUseSamples]
+            sampkeep <- sort(sampkeep, decreasing = T)
+            if (length(sampkeep) < 2) {
+              data <- NULL
+            }else {
+              data <- data[sampkeep,]
+            }
+            data
+          }) %>% `names<-`(names(toUseDataList))
+
+          toUseDataList <- toUseDataList[!sapply(toUseDataList, is.null)]
+          intersectSamples <- Reduce(intersect, lapply(toUseDataList, rownames)) %>% unique()
+          toUseSamples <- intersect(intersectSamples, rownames(survival))
+        }
+
 
         toUseDataList <- lapply(names(toUseDataList), function(dataType) {
           df <- as.matrix(toUseDataList[[dataType]])
@@ -81,10 +125,25 @@ for (dataset in datasets) {
             }
 
             df <- df[, colVars(df) > 0, drop = FALSE]
-            df <- df[, order(colVars(df), decreasing = TRUE)[1:min(8000, ncol(df))]]
+            if (method == "MOVICS") {
+              df <- df[, order(colVars(df), decreasing = TRUE)[1:min(500, ncol(df))]]
+            }else {
+              df <- df[, order(colVars(df), decreasing = TRUE)[1:min(8000, ncol(df))]]
+            }
+
+            # if (method == "subtype_WESLR"){
+            #   df <- df[, order(colVars(df), decreasing = TRUE)[1:min(500, ncol(df))]]
+            # }
+
           }
           df
         }) %>% `names<-`(names(toUseDataList))
+
+        if (method == "MOVICS") {
+          if (length(toUseDataList) > 6) {
+            toUseDataList <- toUseDataList[1:6] ### MOVICS only support 2-6 datatypes
+          }
+        }
 
         resFile <- paste0(resPath, method, "-", dataset, ".rds")
         runningTime <- Sys.time()
@@ -130,11 +189,16 @@ for (dataset in datasets) {
               method = method,
               runningTime = runningTime
             ), file = resFile)
+          
+          print("error occured")
         }
       })()
       gc()
+    # })
     }
 
   })()
   gc()
+# })
 }
+
