@@ -24,7 +24,7 @@ lapply(methods, function(method){
     survival <- clindat$survival
     clindat <- clindat$clinicalImputedV2
 
-    if(method == "nosubtype"){
+    if(method == "Baseline"){
       subtypes <- NULL
     }else{
       subtypes <- readRDS(file.path(subPath, paste0(method, "-", dataset, ".rds")))
