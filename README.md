@@ -3,12 +3,76 @@
 This repo contains the source code and scripts for reproducing the results reported in our paper "DSCC: Disease subtyping using Spectral clustering and Community detection from Consensus networks".
 Please follow the below instructions:
 
-1. Requirements
+#### 1. Requirements
 
-You need an environment with both R and Python installed.
-Also, each of the provided scripts might require some packages being installed before you can run them.
+### Core Requirements (DSCC only)
+
+To run DSCC you need an R-installed environment with the following packages. **Note:** The specified versions are required if you want to reproduce results of DSCC reported in the paper.
+
+| Package | Version |
+|---------|---------|
+| r-base | 4.3.2 |
+| tidyverse | 2.0.0 |
+| survival | 3.5-7 |
+| matrixStats | 1.1.0 |
+| SNFtool | 2.3.1 |
+| igraph | 2.0.2 |
+| cluster | 2.1.4 |
+| RhpcBLASctl | latest |
+
+### Additional Requirements (Comparison methods)
+
+To run 13 comparison methods you need to install additional packages to the R environment. You also need a Python environment (we used python=3.11) with several packages. If you're using conda, you can directly install Python packages to the environment with R.
+
+## R packages
+
+**From CRAN:**
+- devtools
+- data.table
+- mltools
+- survminer
+- metap
+- PMA
+- IntNMF
+- wordspace
+- kernlab
+- polycor
+- psych
+- FactoMineR
+- pbmcapply
+- dplyr
+- reticulate
+- callr
+- MASS
+- quadprog
+- Rtsne
+- blockForest
+
+**From Bioconductor:**
+- ANF
+- ConsensusClusterPlus
+- SIMLR
+
+**From GitHub:**
+- MOVICS (`xlucpu/MOVICS`)
+- CIMLR (`danro9685/CIMLR`)
+- NNLM (`linxihui/NNLM`)
+- NEMO (`Shamir-Lab/NEMO/NEMO`)
+- LRACluster (`Zaoqu-Liu/LRAcluster`)
+
+## Python packages
+
+Install using pip or conda:
+- numpy
+- pandas
+- lifelines
+- pycox
+- scikit-survival
+- torch
+- matplotlib
+- scikit-learn
    
-2. Setup
+#### 2. Setup
 ```bash
 # Clone the repository
 git clone https://github.com/tinnlab/DSCC.git
@@ -35,7 +99,7 @@ wget "https://seafile.tinnguyen-lab.com/f/5f1d638d32a641d08e56/?dl=1" -O Others_
 # unzip the downloaded files
 ```
 
-3. Run analysis for DSCC and comparisons method
+#### 3. Run analysis for DSCC and comparisons method
 ```bash
 # Please check the scripts for required packages before running them
 # Run DSCC
@@ -45,7 +109,7 @@ Rscript Run_DSCC.R --no-save
 Rscript Run_Other.R --no-save
 ```
 
-4. Calculate the performance metrics
+#### 4. Calculate the performance metrics
 ```bash
 # Cox p-values and numbers of clusters
 Rscript GetCoxPv.R --no-save
