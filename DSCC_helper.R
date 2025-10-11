@@ -1,7 +1,3 @@
-### please install these packages if you haven't
-# install.packages(c("SNFtool", "RhpcBLASctl", "tidyverse", "survival", "matrixStats", "igraph"))
-# devtools::install_github('Shamir-Lab/NEMO/NEMO')
-
 RhpcBLASctl::blas_set_num_threads(1)
 RhpcBLASctl::omp_set_num_threads(1)
 
@@ -304,7 +300,7 @@ runDSCC <- function(dataList, nSamples, defk = 10) {
     }else{
       tmpk <- defk
     }
-    if (nSamples > 200) {
+    if (nSamples >= 200) {
       non.sym.knn <- apply(aff, 1, function(sim.row) {
         returned.row <- sim.row
         threshold <- sort(sim.row, decreasing = T)[tmpk]
@@ -334,7 +330,7 @@ runDSCC <- function(dataList, nSamples, defk = 10) {
     }
 
     aff <- distance_to_affinity(dist_matrix, sigma)
-    if (nSamples > 200) {
+    if (nSamples >= 200) {
       non.sym.knn <- apply(aff, 1, function(sim.row) {
         returned.row <- sim.row
         threshold <- sort(sim.row, decreasing = T)[tmpk]
