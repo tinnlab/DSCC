@@ -15,7 +15,7 @@ warnings.filterwarnings('ignore')
 
 ResPath = './SP_Results'
 savePath = './SP_Results'
-all_methods = ["nosubtype", "DSCC", "CC", "CIMLR", "SNF", "LRACluster", "ANF", "IntNMF"]
+all_methods = ["Baseline", "DSCC", "CC", "CIMLR", "SNF", "LRACluster", "IntNMF", "ANF", "NEMO", "MOVICS", "MRGCN", "hMKL", "MDICC", "DLSF", "DSIR"]
 
 
 #### DEFINE FUNCTIONS
