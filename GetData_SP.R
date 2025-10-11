@@ -10,8 +10,8 @@ datasets <- strsplit(datasets, ".rds")
 datasets <- lapply(datasets, function(elm) { elm[1] }) %>% unlist()
 datasets <- setdiff(datasets, c("P23918603", "P38007532"))
 
-methods <- c("nosubtype", "DSCC", "CC", "CIMLR", "SNF", "LRACluster", "ANF", "IntNMF")
-
+methods <- c("Baseline", "DSCC", "CC", "CIMLR", "SNF", "LRACluster", "IntNMF", "ANF", "NEMO", "MOVICS", "MRGCN", "hMKL", "MDICC", "DLSF", "DSIR")
+             
 lapply(methods, function(method){
   print(method)
   if (!file.exists(file.path(savePath, method))){
